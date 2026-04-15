@@ -128,7 +128,8 @@ namespace Shared {
 		mib[1] = HW_NCPU;
 		int ncpu;
 		size_t len = sizeof(ncpu);
-		if (sysctl(mib, 2, &ncpu, &len, nullptr, 0) == -1) {
+		if (sysctl(mib, 2, &ncpu, &len, nullptr, 0) == -1 || ncpu < 1) {
+			coreCount = 1;
 			Logger::warning("Could not determine number of cores, defaulting to 1.");
 		} else {
 			coreCount = ncpu;
@@ -1096,7 +1097,7 @@ namespace Proc {
 		}
 		if (tree_mode_change) is_tree_mode = tree;
 
-		const int cmult = (per_core) ? Shared::coreCount : 1;
+		const double cmult = (per_core) ? 1.0 : 1.0 / Shared::coreCount;
 		bool got_detailed = false;
 
 		static vector<size_t> found;
@@ -1121,9 +1122,6 @@ namespace Proc {
 
 			should_filter = true;
 			found.clear();
-			struct timeval currentTime;
-			gettimeofday(&currentTime, nullptr);
-			const double timeNow = currentTime.tv_sec + (currentTime.tv_usec / 1'000'000);
 
 			int count = 0;
 			char buf[_POSIX2_LINE_MAX];
@@ -1181,10 +1179,6 @@ namespace Proc {
 				new_proc.p_nice = kproc->ki_nice;
 				new_proc.state = kproc->ki_stat;
 
-				int cpu_t = 0;
-				cpu_t 	= kproc->ki_rusage.ru_utime.tv_sec * 1'000'000 + kproc->ki_rusage.ru_utime.tv_usec
-						+ kproc->ki_rusage.ru_stime.tv_sec * 1'000'000 + kproc->ki_rusage.ru_stime.tv_usec;
-
 				new_proc.mem = kproc->ki_rssize * Shared::pageSize;
 				new_proc.threads = kproc->ki_numthreads;
 
@@ -1192,10 +1186,9 @@ namespace Proc {
 				new_proc.cpu_p = clamp((100.0 * kproc->ki_pctcpu / Shared::kfscale) * cmult, 0.0, 100.0 * Shared::coreCount);
 
 				//? Process cumulative cpu usage since process start
-				new_proc.cpu_c = (double)(cpu_t * Shared::clkTck / 1'000'000) / max(1.0, timeNow - new_proc.cpu_s);
-
-				//? Update cached value with latest cpu times
-				new_proc.cpu_t = cpu_t;
+				new_proc.cpu_c = ((uint64_t)kproc->ki_rusage.ru_utime.tv_sec * 1'000'000 + kproc->ki_rusage.ru_utime.tv_usec
+						+ (uint64_t)kproc->ki_rusage.ru_stime.tv_sec * 1'000'000 + kproc->ki_rusage.ru_stime.tv_usec)
+						/ 1e6;
 
 				if (show_detailed and not got_detailed and new_proc.pid == detailed_pid) {
 					got_detailed = true;
